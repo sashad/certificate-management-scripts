@@ -8,18 +8,34 @@ sudo mkdir -p "$WEBROOT"
 sudo chown -R www-data:www-data $WEBROOT  # Adjust user/group as needed
 sudo chmod -R 755 $WEBROOT
 
-# Extract domains from NGINX configs
-DOMAINS=$(grep -h "server_name" /etc/nginx/sites-enabled/*.conf | grep -v "\.conf~" | awk '{print $2}' | tr ';' ' ' | xargs -n1 | sort -u | grep -v "_")
+# Get all NGINX config files
+CONFIG_FILES=$(find /etc/nginx/sites-available/ -name "*.conf" | grep -v "\.conf~")
 
-# Request certificates for all domains
-for domain in $DOMAINS; do
-    if [[ "$domain" == *"example.com"* ]]; then
-        # echo "⏭️ Skipping $domain (contains 'example.com')"
-        continue
-    fi
-    echo $domain
-    sudo certbot certonly --webroot -w $WEBROOT -d $domain --non-interactive --agree-tos -m demidoff@1vp.ru
+# Get the directory of the current script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+# echo $SCRIPT_DIR
+# exit 0
+
+# Iterate over each config file
+for config_file in $CONFIG_FILES; do
+    # Parse server_names from config file
+    DOMAINS=$("$SCRIPT_DIR/parse_config.sh" "$config_file" | sort -u | grep -v "example.com")
+
+    # Request certificates for all domains in the config file
+    for domain in $DOMAINS; do
+        echo $domain
+        if sudo certbot certonly --webroot -w $WEBROOT -d $domain --non-interactive --agree-tos -m demidoff@1vp.ru; then
+            # Certificate request successful, create symlink
+            sudo ln -sf "$config_file" "/etc/nginx/sites-enabled/$(basename "$config_file")"
+        else
+            # Certificate request failed, remove symlink if it exists
+            if [ -L "/etc/nginx/sites-enabled/$(basename "$config_file")" ]; then
+                sudo rm "/etc/nginx/sites-enabled/$(basename "$config_file")"
+            fi
+        fi
+    done
 done
 
 # Reload NGINX
-# sudo nginx -t && sudo systemctl reload nginx
+sudo nginx -t && sudo systemctl reload nginx
